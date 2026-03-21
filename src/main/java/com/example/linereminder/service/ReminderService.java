@@ -20,10 +20,11 @@ import java.util.regex.Pattern;
  * リマインダーのビジネスロジックを担当するサービス
  *
  * 対応コマンド:
- *   リマインド YYYY-MM-DD HH:mm メッセージ  → リマインダー登録
- *   リスト                                 → 登録中リマインダー一覧
- *   削除 {id}                             → リマインダー削除
- *   ヘルプ                                → 使い方表示
+ *   リマインド YYYY-MM-DD HH:mm メッセージ          → リマインダー登録
+ *   カレンダー YYYY-MM-DD HH:mm HH:mm タイトル      → Googleカレンダー登録
+ *   リスト                                          → 登録中リマインダー一覧
+ *   削除 {id}                                       → リマインダー削除
+ *   ヘルプ                                           → 使い方表示
  */
 @Slf4j
 @Service
@@ -31,6 +32,7 @@ import java.util.regex.Pattern;
 public class ReminderService {
 
     private final ReminderRepository reminderRepository;
+    private final GoogleCalendarService googleCalendarService;
 
     // パターン: "リマインド 2026-03-21 14:00 会議" または "リマインド 明日 14:00 会議"
     private static final Pattern REMIND_PATTERN_DATE =
@@ -46,6 +48,18 @@ public class ReminderService {
 
     private static final Pattern DELETE_PATTERN =
             Pattern.compile("^削除\\s+(\\d+)$");
+
+    // カレンダーパターン: "カレンダー 2026-03-21 14:00 15:00 会議"
+    private static final Pattern CALENDAR_PATTERN_DATE =
+            Pattern.compile("^カレンダー\\s+(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2})\\s+(\\d{2}:\\d{2})\\s+(.+)$");
+
+    // カレンダーパターン: "カレンダー 今日 14:00 15:00 会議"
+    private static final Pattern CALENDAR_PATTERN_TODAY =
+            Pattern.compile("^カレンダー\\s+今日\\s+(\\d{2}:\\d{2})\\s+(\\d{2}:\\d{2})\\s+(.+)$");
+
+    // カレンダーパターン: "カレンダー 明日 14:00 15:00 会議"
+    private static final Pattern CALENDAR_PATTERN_TOMORROW =
+            Pattern.compile("^カレンダー\\s+明日\\s+(\\d{2}:\\d{2})\\s+(\\d{2}:\\d{2})\\s+(.+)$");
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
@@ -102,6 +116,36 @@ public class ReminderService {
             String message = todayMatcher.group(2);
             String dateStr = LocalDate.now().toString();
             return registerReminder(userId, dateStr + " " + timeStr, message);
+        }
+
+        // 日付直接指定: カレンダー 2026-03-21 14:00 15:00 タイトル
+        Matcher calDateMatcher = CALENDAR_PATTERN_DATE.matcher(trimmed);
+        if (calDateMatcher.matches()) {
+            String dateStr   = calDateMatcher.group(1);
+            String startStr  = calDateMatcher.group(2);
+            String endStr    = calDateMatcher.group(3);
+            String title     = calDateMatcher.group(4);
+            return registerCalendarEvent(dateStr, startStr, endStr, title);
+        }
+
+        // 今日指定: カレンダー 今日 14:00 15:00 タイトル
+        Matcher calTodayMatcher = CALENDAR_PATTERN_TODAY.matcher(trimmed);
+        if (calTodayMatcher.matches()) {
+            String dateStr   = LocalDate.now().toString();
+            String startStr  = calTodayMatcher.group(1);
+            String endStr    = calTodayMatcher.group(2);
+            String title     = calTodayMatcher.group(3);
+            return registerCalendarEvent(dateStr, startStr, endStr, title);
+        }
+
+        // 明日指定: カレンダー 明日 14:00 15:00 タイトル
+        Matcher calTomorrowMatcher = CALENDAR_PATTERN_TOMORROW.matcher(trimmed);
+        if (calTomorrowMatcher.matches()) {
+            String dateStr   = LocalDate.now().plusDays(1).toString();
+            String startStr  = calTomorrowMatcher.group(1);
+            String endStr    = calTomorrowMatcher.group(2);
+            String title     = calTomorrowMatcher.group(3);
+            return registerCalendarEvent(dateStr, startStr, endStr, title);
         }
 
         // どのコマンドにもマッチしない場合
@@ -178,6 +222,31 @@ public class ReminderService {
     }
 
     /**
+     * Googleカレンダーに予定を登録する
+     */
+    private String registerCalendarEvent(String dateStr, String startStr, String endStr, String title) {
+        LocalDateTime startTime;
+        LocalDateTime endTime;
+        try {
+            startTime = LocalDateTime.parse(dateStr + " " + startStr, DATE_TIME_FORMATTER);
+            endTime   = LocalDateTime.parse(dateStr + " " + endStr,   DATE_TIME_FORMATTER);
+        } catch (DateTimeParseException e) {
+            return "日時の形式が正しくありません。\n例: カレンダー 2026-03-21 14:00 15:00 会議";
+        }
+
+        if (endTime.isBefore(startTime) || endTime.isEqual(startTime)) {
+            return "終了時刻は開始時刻より後に設定してください。";
+        }
+
+        if (startTime.isBefore(LocalDateTime.now())) {
+            return "過去の日時は登録できません。未来の日時を指定してください。";
+        }
+
+        log.info("カレンダー登録: date={}, start={}, end={}, title={}", dateStr, startStr, endStr, title);
+        return googleCalendarService.createEvent(title, startTime, endTime);
+    }
+
+    /**
      * ヘルプメッセージを返す
      */
     private String buildHelpMessage() {
@@ -189,6 +258,13 @@ public class ReminderService {
                "例: リマインド 今日 18:00 薬を飲む\n\n" +
                "リマインド 明日 HH:mm メッセージ\n" +
                "例: リマインド 明日 09:00 朝のミーティング\n\n" +
+               "■ Googleカレンダー登録\n" +
+               "カレンダー YYYY-MM-DD HH:mm HH:mm タイトル\n" +
+               "例: カレンダー 2026-03-21 14:00 15:00 会議\n\n" +
+               "カレンダー 今日 HH:mm HH:mm タイトル\n" +
+               "例: カレンダー 今日 18:00 19:00 夕食\n\n" +
+               "カレンダー 明日 HH:mm HH:mm タイトル\n" +
+               "例: カレンダー 明日 09:00 10:00 朝のMTG\n\n" +
                "■ 一覧表示\n" +
                "リスト\n\n" +
                "■ 削除\n" +
