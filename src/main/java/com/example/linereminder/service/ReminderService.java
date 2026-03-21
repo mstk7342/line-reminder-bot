@@ -337,7 +337,7 @@ public class ReminderService {
     private String registerCalendarEventWithEnd(
             String startDateStr, String startStr,
             String endDateStr,   String endStr,
-            String title) {
+            String rawTitle) {
 
         String normStart = startStr.length() == 4 ? "0" + startStr : startStr;
         String normEnd   = endStr.length()   == 4 ? "0" + endStr   : endStr;
@@ -359,15 +359,18 @@ public class ReminderService {
             return "過去の日時は登録できません。未来の日時を指定してください。";
         }
 
-        log.info("カレンダー登録(期間): start={}, end={}, title={}", startTime, endTime, title);
-        return googleCalendarService.createEvent(title, startTime, endTime);
+        String[] titleAndColor = extractTitleAndColor(rawTitle);
+        String title   = titleAndColor[0];
+        String colorId = GoogleCalendarService.resolveColorId(titleAndColor[1]);
+
+        log.info("カレンダー登録(期間): start={}, end={}, title={}, color={}", startTime, endTime, title, titleAndColor[1]);
+        return googleCalendarService.createEvent(title, startTime, endTime, colorId);
     }
 
     /**
      * Googleカレンダーに予定を登録する（終了時刻は開始の1時間後で自動設定）
      */
-    private String registerCalendarEvent(String dateStr, String startStr, String title) {
-        // 時刻が "9:00" のように1桁の場合に備えてゼロ埋め
+    private String registerCalendarEvent(String dateStr, String startStr, String rawTitle) {
         String normalizedTime = startStr.length() == 4 ? "0" + startStr : startStr;
         LocalDateTime startTime;
         try {
@@ -380,11 +383,30 @@ public class ReminderService {
             return "過去の日時は登録できません。未来の日時を指定してください。";
         }
 
-        // 終了時刻は自動で1時間後
         LocalDateTime endTime = startTime.plusHours(1);
 
-        log.info("カレンダー登録: date={}, start={}, title={}", dateStr, startStr, title);
-        return googleCalendarService.createEvent(title, startTime, endTime);
+        String[] titleAndColor = extractTitleAndColor(rawTitle);
+        String title   = titleAndColor[0];
+        String colorId = GoogleCalendarService.resolveColorId(titleAndColor[1]);
+
+        log.info("カレンダー登録: date={}, start={}, title={}, color={}", dateStr, startStr, title, titleAndColor[1]);
+        return googleCalendarService.createEvent(title, startTime, endTime, colorId);
+    }
+
+    /**
+     * タイトル末尾の "#色名" を抽出する
+     * 例: "会議 #赤" → ["会議", "赤"]
+     *     "会議"     → ["会議", null]
+     */
+    private static final Pattern COLOR_TAG_PATTERN =
+            Pattern.compile("^(.+?)\\s+#(\\S+)$");
+
+    private String[] extractTitleAndColor(String rawTitle) {
+        Matcher m = COLOR_TAG_PATTERN.matcher(rawTitle.trim());
+        if (m.matches()) {
+            return new String[]{m.group(1), m.group(2)};
+        }
+        return new String[]{rawTitle.trim(), null};
     }
 
     /**
@@ -430,6 +452,10 @@ public class ReminderService {
                "カレンダー 3/25 18:00 20:00 飲み会\n\n" +
                "[期間指定 (複数日)]\n" +
                "カレンダー 3/12 11:00~3/13 23:00 旅行\n\n" +
+               "[色を指定する場合はタイトルの後に #色名]\n" +
+               "例: カレンダー 今日 14:00 会議 #赤\n" +
+               "選べる色: 赤 ピンク 黄 オレンジ 緑 薄緑\n" +
+               "        水色 青 紫 薄紫 グレー\n\n" +
                "■ 一覧表示\n" +
                "リスト\n\n" +
                "■ 削除\n" +

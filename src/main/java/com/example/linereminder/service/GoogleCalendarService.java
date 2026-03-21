@@ -70,20 +70,53 @@ public class GoogleCalendarService {
     }
 
     /**
+     * Google Calendar のカラーID対応表
+     * キー: 日本語色名, 値: Google Calendar colorId
+     */
+    private static final java.util.Map<String, String> COLOR_MAP =
+            java.util.Map.ofEntries(
+                    java.util.Map.entry("赤",   "11"),  // トマト
+                    java.util.Map.entry("ピンク", "4"),  // フラミンゴ
+                    java.util.Map.entry("黄",    "5"),  // バナナ
+                    java.util.Map.entry("オレンジ","6"), // タンジェリン
+                    java.util.Map.entry("緑",   "10"),  // バジル
+                    java.util.Map.entry("薄緑",  "2"),  // セージ
+                    java.util.Map.entry("水色",  "7"),  // ピーコック
+                    java.util.Map.entry("青",    "9"),  // ブルーベリー
+                    java.util.Map.entry("紫",    "3"),  // グレープ
+                    java.util.Map.entry("薄紫",  "1"),  // ラベンダー
+                    java.util.Map.entry("グレー", "8")  // グラファイト
+            );
+
+    /**
+     * 日本語色名を Google Calendar の colorId に変換する
+     * 対応していない色名の場合は null を返す（デフォルト色を使用）
+     */
+    public static String resolveColorId(String colorName) {
+        if (colorName == null) return null;
+        return COLOR_MAP.get(colorName);
+    }
+
+    /**
      * Googleカレンダーに予定を登録する
      *
-     * @param title  予定のタイトル
-     * @param start  開始日時
-     * @param end    終了日時
+     * @param title    予定のタイトル
+     * @param start    開始日時
+     * @param end      終了日時
+     * @param colorId  カラーID (null の場合はカレンダーのデフォルト色)
      * @return 登録結果の返信テキスト
      */
-    public String createEvent(String title, LocalDateTime start, LocalDateTime end) {
+    public String createEvent(String title, LocalDateTime start, LocalDateTime end, String colorId) {
         if (calendarClient == null) {
             return "Google Calendarの初期化に失敗しています。設定を確認してください。";
         }
 
         try {
             Event event = new Event().setSummary(title);
+
+            if (colorId != null) {
+                event.setColorId(colorId);
+            }
 
             com.google.api.client.util.DateTime startDateTime =
                     new com.google.api.client.util.DateTime(
@@ -100,16 +133,24 @@ public class GoogleCalendarService {
                     .setTimeZone("Asia/Tokyo"));
 
             Event created = calendarClient.events().insert(calendarId, event).execute();
-            log.info("カレンダー登録完了: eventId={}, title={}", created.getId(), title);
+            log.info("カレンダー登録完了: eventId={}, title={}, colorId={}", created.getId(), title, colorId);
+
+            String colorLabel = colorId != null
+                    ? COLOR_MAP.entrySet().stream()
+                        .filter(e -> e.getValue().equals(colorId))
+                        .map(java.util.Map.Entry::getKey)
+                        .findFirst().orElse("")
+                    : "";
 
             return String.format(
                     "Googleカレンダーに予定を登録しました!\n\n" +
                     "タイトル: %s\n" +
                     "開始: %s\n" +
-                    "終了: %s",
+                    "終了: %s%s",
                     title,
                     start.format(DISPLAY_FORMATTER),
-                    end.format(DISPLAY_FORMATTER)
+                    end.format(DISPLAY_FORMATTER),
+                    colorLabel.isEmpty() ? "" : "\n色: " + colorLabel
             );
 
         } catch (IOException e) {
