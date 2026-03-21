@@ -49,19 +49,49 @@ public class ReminderService {
     private static final Pattern DELETE_PATTERN =
             Pattern.compile("^削除\\s+(\\d+)$");
 
-    // カレンダーパターン: "カレンダー 今日 14:00 会議"
+    // ── 期間指定 (開始日時~終了日時) ────────────────────────────────────
+
+    // "カレンダー 3/12 11:00~3/13 23:00 旅行"
+    private static final Pattern CALENDAR_RANGE_SLASH =
+            Pattern.compile("^カレンダー\\s+(\\d{1,2}/\\d{1,2})\\s+(\\d{1,2}:\\d{2})~(\\d{1,2}/\\d{1,2})\\s+(\\d{1,2}:\\d{2})\\s+(.+)$");
+
+    // "カレンダー 2026-03-12 11:00~2026-03-13 23:00 旅行"
+    private static final Pattern CALENDAR_RANGE_DATE =
+            Pattern.compile("^カレンダー\\s+(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{1,2}:\\d{2})~(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{1,2}:\\d{2})\\s+(.+)$");
+
+    // ── 終了時刻あり (同日) ──────────────────────────────────────────────
+
+    // "カレンダー 今日 14:00 15:30 会議"
+    private static final Pattern CALENDAR_TODAY_WITH_END =
+            Pattern.compile("^カレンダー\\s+今日\\s+(\\d{1,2}:\\d{2})\\s+(\\d{1,2}:\\d{2})\\s+(.+)$");
+
+    // "カレンダー 明日 14:00 15:30 会議"
+    private static final Pattern CALENDAR_TOMORROW_WITH_END =
+            Pattern.compile("^カレンダー\\s+明日\\s+(\\d{1,2}:\\d{2})\\s+(\\d{1,2}:\\d{2})\\s+(.+)$");
+
+    // "カレンダー 3/21 14:00 15:30 会議"
+    private static final Pattern CALENDAR_SLASH_WITH_END =
+            Pattern.compile("^カレンダー\\s+(\\d{1,2}/\\d{1,2})\\s+(\\d{1,2}:\\d{2})\\s+(\\d{1,2}:\\d{2})\\s+(.+)$");
+
+    // "カレンダー 2026-03-21 14:00 15:30 会議"
+    private static final Pattern CALENDAR_DATE_WITH_END =
+            Pattern.compile("^カレンダー\\s+(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{1,2}:\\d{2})\\s+(\\d{1,2}:\\d{2})\\s+(.+)$");
+
+    // ── 終了時刻なし (自動で1時間後) ────────────────────────────────────
+
+    // "カレンダー 今日 14:00 会議"
     private static final Pattern CALENDAR_PATTERN_TODAY =
             Pattern.compile("^カレンダー\\s+今日\\s+(\\d{1,2}:\\d{2})\\s+(.+)$");
 
-    // カレンダーパターン: "カレンダー 明日 14:00 会議"
+    // "カレンダー 明日 14:00 会議"
     private static final Pattern CALENDAR_PATTERN_TOMORROW =
             Pattern.compile("^カレンダー\\s+明日\\s+(\\d{1,2}:\\d{2})\\s+(.+)$");
 
-    // カレンダーパターン: "カレンダー 3/21 14:00 会議" (M/DD or MM/DD)
+    // "カレンダー 3/21 14:00 会議"
     private static final Pattern CALENDAR_PATTERN_SLASH =
             Pattern.compile("^カレンダー\\s+(\\d{1,2}/\\d{1,2})\\s+(\\d{1,2}:\\d{2})\\s+(.+)$");
 
-    // カレンダーパターン: "カレンダー 2026-03-21 14:00 会議"
+    // "カレンダー 2026-03-21 14:00 会議"
     private static final Pattern CALENDAR_PATTERN_DATE =
             Pattern.compile("^カレンダー\\s+(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{1,2}:\\d{2})\\s+(.+)$");
 
@@ -120,6 +150,71 @@ public class ReminderService {
             String message = todayMatcher.group(2);
             String dateStr = LocalDate.now().toString();
             return registerReminder(userId, dateStr + " " + timeStr, message);
+        }
+
+        // 期間指定 (M/DD~M/DD): カレンダー 3/12 11:00~3/13 23:00 旅行
+        Matcher rangeSlashMatcher = CALENDAR_RANGE_SLASH.matcher(trimmed);
+        if (rangeSlashMatcher.matches()) {
+            String startDate = resolveSlashDate(rangeSlashMatcher.group(1));
+            String startTime = rangeSlashMatcher.group(2);
+            String endDate   = resolveSlashDate(rangeSlashMatcher.group(3));
+            String endTime   = rangeSlashMatcher.group(4);
+            String title     = rangeSlashMatcher.group(5);
+            if (startDate == null || endDate == null) {
+                return "日付の形式が正しくありません。\n例: カレンダー 3/12 11:00~3/13 23:00 旅行";
+            }
+            return registerCalendarEventWithEnd(startDate, startTime, endDate, endTime, title);
+        }
+
+        // 期間指定 (YYYY-MM-DD~YYYY-MM-DD): カレンダー 2026-03-12 11:00~2026-03-13 23:00 旅行
+        Matcher rangeDateMatcher = CALENDAR_RANGE_DATE.matcher(trimmed);
+        if (rangeDateMatcher.matches()) {
+            return registerCalendarEventWithEnd(
+                    rangeDateMatcher.group(1), rangeDateMatcher.group(2),
+                    rangeDateMatcher.group(3), rangeDateMatcher.group(4),
+                    rangeDateMatcher.group(5));
+        }
+
+        // 終了時刻あり (今日): カレンダー 今日 14:00 15:30 会議
+        Matcher todayEndMatcher = CALENDAR_TODAY_WITH_END.matcher(trimmed);
+        if (todayEndMatcher.matches()) {
+            String dateStr = LocalDate.now().toString();
+            return registerCalendarEventWithEnd(
+                    dateStr, todayEndMatcher.group(1),
+                    dateStr, todayEndMatcher.group(2),
+                    todayEndMatcher.group(3));
+        }
+
+        // 終了時刻あり (明日): カレンダー 明日 14:00 15:30 会議
+        Matcher tomorrowEndMatcher = CALENDAR_TOMORROW_WITH_END.matcher(trimmed);
+        if (tomorrowEndMatcher.matches()) {
+            String dateStr = LocalDate.now().plusDays(1).toString();
+            return registerCalendarEventWithEnd(
+                    dateStr, tomorrowEndMatcher.group(1),
+                    dateStr, tomorrowEndMatcher.group(2),
+                    tomorrowEndMatcher.group(3));
+        }
+
+        // 終了時刻あり (M/DD): カレンダー 3/21 14:00 15:30 会議
+        Matcher slashEndMatcher = CALENDAR_SLASH_WITH_END.matcher(trimmed);
+        if (slashEndMatcher.matches()) {
+            String dateStr = resolveSlashDate(slashEndMatcher.group(1));
+            if (dateStr == null) {
+                return "日付の形式が正しくありません。\n例: カレンダー 3/21 14:00 15:30 会議";
+            }
+            return registerCalendarEventWithEnd(
+                    dateStr, slashEndMatcher.group(2),
+                    dateStr, slashEndMatcher.group(3),
+                    slashEndMatcher.group(4));
+        }
+
+        // 終了時刻あり (YYYY-MM-DD): カレンダー 2026-03-21 14:00 15:30 会議
+        Matcher dateEndMatcher = CALENDAR_DATE_WITH_END.matcher(trimmed);
+        if (dateEndMatcher.matches()) {
+            return registerCalendarEventWithEnd(
+                    dateEndMatcher.group(1), dateEndMatcher.group(2),
+                    dateEndMatcher.group(1), dateEndMatcher.group(3),
+                    dateEndMatcher.group(4));
         }
 
         // 今日指定: カレンダー 今日 14:00 タイトル
@@ -236,6 +331,39 @@ public class ReminderService {
     }
 
     /**
+     * Googleカレンダーに予定を登録する（終了日時を明示指定）
+     * 期間指定・終了時刻指定の両方で使用
+     */
+    private String registerCalendarEventWithEnd(
+            String startDateStr, String startStr,
+            String endDateStr,   String endStr,
+            String title) {
+
+        String normStart = startStr.length() == 4 ? "0" + startStr : startStr;
+        String normEnd   = endStr.length()   == 4 ? "0" + endStr   : endStr;
+
+        LocalDateTime startTime;
+        LocalDateTime endTime;
+        try {
+            startTime = LocalDateTime.parse(startDateStr + " " + normStart, DATE_TIME_FORMATTER);
+            endTime   = LocalDateTime.parse(endDateStr   + " " + normEnd,   DATE_TIME_FORMATTER);
+        } catch (DateTimeParseException e) {
+            return "日時の形式が正しくありません。\n例: カレンダー 3/12 11:00~3/13 23:00 旅行";
+        }
+
+        if (endTime.isBefore(startTime) || endTime.isEqual(startTime)) {
+            return "終了日時は開始日時より後に設定してください。";
+        }
+
+        if (startTime.isBefore(LocalDateTime.now())) {
+            return "過去の日時は登録できません。未来の日時を指定してください。";
+        }
+
+        log.info("カレンダー登録(期間): start={}, end={}, title={}", startTime, endTime, title);
+        return googleCalendarService.createEvent(title, startTime, endTime);
+    }
+
+    /**
      * Googleカレンダーに予定を登録する（終了時刻は開始の1時間後で自動設定）
      */
     private String registerCalendarEvent(String dateStr, String startStr, String title) {
@@ -292,13 +420,16 @@ public class ReminderService {
                "例: リマインド 今日 18:00 薬を飲む\n\n" +
                "リマインド 明日 HH:mm メッセージ\n" +
                "例: リマインド 明日 09:00 朝のミーティング\n\n" +
-               "■ Googleカレンダー登録 (終了は自動で1時間後)\n" +
-               "カレンダー 今日 HH:mm タイトル\n" +
-               "例: カレンダー 今日 14:00 会議\n\n" +
-               "カレンダー 明日 HH:mm タイトル\n" +
-               "例: カレンダー 明日 9:00 歯医者\n\n" +
-               "カレンダー M/DD HH:mm タイトル\n" +
-               "例: カレンダー 3/25 18:00 飲み会\n\n" +
+               "■ Googleカレンダー登録\n" +
+               "[終了時刻なし → 自動で1時間後]\n" +
+               "カレンダー 今日 14:00 会議\n" +
+               "カレンダー 明日 9:00 歯医者\n" +
+               "カレンダー 3/25 18:00 飲み会\n\n" +
+               "[終了時刻あり]\n" +
+               "カレンダー 今日 14:00 15:30 会議\n" +
+               "カレンダー 3/25 18:00 20:00 飲み会\n\n" +
+               "[期間指定 (複数日)]\n" +
+               "カレンダー 3/12 11:00~3/13 23:00 旅行\n\n" +
                "■ 一覧表示\n" +
                "リスト\n\n" +
                "■ 削除\n" +
