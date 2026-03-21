@@ -119,6 +119,10 @@ public class ReminderService {
             return buildReminderList(userId);
         }
 
+        if (trimmed.equals("カラーリスト") || trimmed.equals("colors")) {
+            return buildColorList();
+        }
+
         Matcher deleteMatcher = DELETE_PATTERN.matcher(trimmed);
         if (deleteMatcher.matches()) {
             long id = Long.parseLong(deleteMatcher.group(1));
@@ -328,6 +332,27 @@ public class ReminderService {
         reminderRepository.delete(reminderOpt.get());
         log.info("リマインダー削除: id={}, userId={}", id, userId);
         return String.format("ID:%d のリマインダーを削除しました。", id);
+    }
+
+    /**
+     * 利用可能な色一覧を返す
+     */
+    private String buildColorList() {
+        return "【カレンダー 色一覧】\n\n" +
+               "予定登録時にタイトルの後へ追記してください。\n" +
+               "例: カレンダー 今日 14:00 会議 #赤\n\n" +
+               "#赤    → トマト\n" +
+               "#ピンク → フラミンゴ\n" +
+               "#黄    → バナナ\n" +
+               "#オレンジ → タンジェリン\n" +
+               "#緑    → バジル\n" +
+               "#薄緑  → セージ\n" +
+               "#水色  → ピーコック\n" +
+               "#青    → ブルーベリー\n" +
+               "#紫    → グレープ\n" +
+               "#薄紫  → ラベンダー\n" +
+               "#グレー → グラファイト\n\n" +
+               "色を省略するとデフォルト色になります。";
     }
 
     /**
