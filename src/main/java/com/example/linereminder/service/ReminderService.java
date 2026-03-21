@@ -49,17 +49,21 @@ public class ReminderService {
     private static final Pattern DELETE_PATTERN =
             Pattern.compile("^削除\\s+(\\d+)$");
 
-    // カレンダーパターン: "カレンダー 2026-03-21 14:00 15:00 会議"
-    private static final Pattern CALENDAR_PATTERN_DATE =
-            Pattern.compile("^カレンダー\\s+(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2})\\s+(\\d{2}:\\d{2})\\s+(.+)$");
-
-    // カレンダーパターン: "カレンダー 今日 14:00 15:00 会議"
+    // カレンダーパターン: "カレンダー 今日 14:00 会議"
     private static final Pattern CALENDAR_PATTERN_TODAY =
-            Pattern.compile("^カレンダー\\s+今日\\s+(\\d{2}:\\d{2})\\s+(\\d{2}:\\d{2})\\s+(.+)$");
+            Pattern.compile("^カレンダー\\s+今日\\s+(\\d{1,2}:\\d{2})\\s+(.+)$");
 
-    // カレンダーパターン: "カレンダー 明日 14:00 15:00 会議"
+    // カレンダーパターン: "カレンダー 明日 14:00 会議"
     private static final Pattern CALENDAR_PATTERN_TOMORROW =
-            Pattern.compile("^カレンダー\\s+明日\\s+(\\d{2}:\\d{2})\\s+(\\d{2}:\\d{2})\\s+(.+)$");
+            Pattern.compile("^カレンダー\\s+明日\\s+(\\d{1,2}:\\d{2})\\s+(.+)$");
+
+    // カレンダーパターン: "カレンダー 3/21 14:00 会議" (M/DD or MM/DD)
+    private static final Pattern CALENDAR_PATTERN_SLASH =
+            Pattern.compile("^カレンダー\\s+(\\d{1,2}/\\d{1,2})\\s+(\\d{1,2}:\\d{2})\\s+(.+)$");
+
+    // カレンダーパターン: "カレンダー 2026-03-21 14:00 会議"
+    private static final Pattern CALENDAR_PATTERN_DATE =
+            Pattern.compile("^カレンダー\\s+(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{1,2}:\\d{2})\\s+(.+)$");
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
@@ -118,34 +122,44 @@ public class ReminderService {
             return registerReminder(userId, dateStr + " " + timeStr, message);
         }
 
-        // 日付直接指定: カレンダー 2026-03-21 14:00 15:00 タイトル
-        Matcher calDateMatcher = CALENDAR_PATTERN_DATE.matcher(trimmed);
-        if (calDateMatcher.matches()) {
-            String dateStr   = calDateMatcher.group(1);
-            String startStr  = calDateMatcher.group(2);
-            String endStr    = calDateMatcher.group(3);
-            String title     = calDateMatcher.group(4);
-            return registerCalendarEvent(dateStr, startStr, endStr, title);
-        }
-
-        // 今日指定: カレンダー 今日 14:00 15:00 タイトル
+        // 今日指定: カレンダー 今日 14:00 タイトル
         Matcher calTodayMatcher = CALENDAR_PATTERN_TODAY.matcher(trimmed);
         if (calTodayMatcher.matches()) {
-            String dateStr   = LocalDate.now().toString();
-            String startStr  = calTodayMatcher.group(1);
-            String endStr    = calTodayMatcher.group(2);
-            String title     = calTodayMatcher.group(3);
-            return registerCalendarEvent(dateStr, startStr, endStr, title);
+            String dateStr  = LocalDate.now().toString();
+            String startStr = calTodayMatcher.group(1);
+            String title    = calTodayMatcher.group(2);
+            return registerCalendarEvent(dateStr, startStr, title);
         }
 
-        // 明日指定: カレンダー 明日 14:00 15:00 タイトル
+        // 明日指定: カレンダー 明日 14:00 タイトル
         Matcher calTomorrowMatcher = CALENDAR_PATTERN_TOMORROW.matcher(trimmed);
         if (calTomorrowMatcher.matches()) {
-            String dateStr   = LocalDate.now().plusDays(1).toString();
-            String startStr  = calTomorrowMatcher.group(1);
-            String endStr    = calTomorrowMatcher.group(2);
-            String title     = calTomorrowMatcher.group(3);
-            return registerCalendarEvent(dateStr, startStr, endStr, title);
+            String dateStr  = LocalDate.now().plusDays(1).toString();
+            String startStr = calTomorrowMatcher.group(1);
+            String title    = calTomorrowMatcher.group(2);
+            return registerCalendarEvent(dateStr, startStr, title);
+        }
+
+        // M/DD指定: カレンダー 3/21 14:00 タイトル
+        Matcher calSlashMatcher = CALENDAR_PATTERN_SLASH.matcher(trimmed);
+        if (calSlashMatcher.matches()) {
+            String slashDate = calSlashMatcher.group(1); // "3/21"
+            String startStr  = calSlashMatcher.group(2);
+            String title     = calSlashMatcher.group(3);
+            String dateStr   = resolveSlashDate(slashDate);
+            if (dateStr == null) {
+                return "日付の形式が正しくありません。\n例: カレンダー 3/21 14:00 会議";
+            }
+            return registerCalendarEvent(dateStr, startStr, title);
+        }
+
+        // 日付直接指定: カレンダー 2026-03-21 14:00 タイトル
+        Matcher calDateMatcher = CALENDAR_PATTERN_DATE.matcher(trimmed);
+        if (calDateMatcher.matches()) {
+            String dateStr  = calDateMatcher.group(1);
+            String startStr = calDateMatcher.group(2);
+            String title    = calDateMatcher.group(3);
+            return registerCalendarEvent(dateStr, startStr, title);
         }
 
         // どのコマンドにもマッチしない場合
@@ -222,28 +236,48 @@ public class ReminderService {
     }
 
     /**
-     * Googleカレンダーに予定を登録する
+     * Googleカレンダーに予定を登録する（終了時刻は開始の1時間後で自動設定）
      */
-    private String registerCalendarEvent(String dateStr, String startStr, String endStr, String title) {
+    private String registerCalendarEvent(String dateStr, String startStr, String title) {
+        // 時刻が "9:00" のように1桁の場合に備えてゼロ埋め
+        String normalizedTime = startStr.length() == 4 ? "0" + startStr : startStr;
         LocalDateTime startTime;
-        LocalDateTime endTime;
         try {
-            startTime = LocalDateTime.parse(dateStr + " " + startStr, DATE_TIME_FORMATTER);
-            endTime   = LocalDateTime.parse(dateStr + " " + endStr,   DATE_TIME_FORMATTER);
+            startTime = LocalDateTime.parse(dateStr + " " + normalizedTime, DATE_TIME_FORMATTER);
         } catch (DateTimeParseException e) {
-            return "日時の形式が正しくありません。\n例: カレンダー 2026-03-21 14:00 15:00 会議";
-        }
-
-        if (endTime.isBefore(startTime) || endTime.isEqual(startTime)) {
-            return "終了時刻は開始時刻より後に設定してください。";
+            return "日時の形式が正しくありません。\n例: カレンダー 今日 14:00 会議";
         }
 
         if (startTime.isBefore(LocalDateTime.now())) {
             return "過去の日時は登録できません。未来の日時を指定してください。";
         }
 
-        log.info("カレンダー登録: date={}, start={}, end={}, title={}", dateStr, startStr, endStr, title);
+        // 終了時刻は自動で1時間後
+        LocalDateTime endTime = startTime.plusHours(1);
+
+        log.info("カレンダー登録: date={}, start={}, title={}", dateStr, startStr, title);
         return googleCalendarService.createEvent(title, startTime, endTime);
+    }
+
+    /**
+     * "3/21" や "12/5" 形式の日付を "2026-03-21" に変換する
+     * 月が現在より前の場合は翌年として扱う
+     */
+    private String resolveSlashDate(String slashDate) {
+        try {
+            String[] parts = slashDate.split("/");
+            int month = Integer.parseInt(parts[0]);
+            int day   = Integer.parseInt(parts[1]);
+            int year  = LocalDate.now().getYear();
+            LocalDate date = LocalDate.of(year, month, day);
+            // 指定日が過去なら翌年扱い
+            if (date.isBefore(LocalDate.now())) {
+                date = date.plusYears(1);
+            }
+            return date.toString();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**
@@ -258,13 +292,13 @@ public class ReminderService {
                "例: リマインド 今日 18:00 薬を飲む\n\n" +
                "リマインド 明日 HH:mm メッセージ\n" +
                "例: リマインド 明日 09:00 朝のミーティング\n\n" +
-               "■ Googleカレンダー登録\n" +
-               "カレンダー YYYY-MM-DD HH:mm HH:mm タイトル\n" +
-               "例: カレンダー 2026-03-21 14:00 15:00 会議\n\n" +
-               "カレンダー 今日 HH:mm HH:mm タイトル\n" +
-               "例: カレンダー 今日 18:00 19:00 夕食\n\n" +
-               "カレンダー 明日 HH:mm HH:mm タイトル\n" +
-               "例: カレンダー 明日 09:00 10:00 朝のMTG\n\n" +
+               "■ Googleカレンダー登録 (終了は自動で1時間後)\n" +
+               "カレンダー 今日 HH:mm タイトル\n" +
+               "例: カレンダー 今日 14:00 会議\n\n" +
+               "カレンダー 明日 HH:mm タイトル\n" +
+               "例: カレンダー 明日 9:00 歯医者\n\n" +
+               "カレンダー M/DD HH:mm タイトル\n" +
+               "例: カレンダー 3/25 18:00 飲み会\n\n" +
                "■ 一覧表示\n" +
                "リスト\n\n" +
                "■ 削除\n" +
